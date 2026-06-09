@@ -1,0 +1,86 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: baileys-postgres
+    environment:
+      POSTGRES_DB: baileys_api
+      POSTGRES_USER: baileys
+      POSTGRES_PASSWORD: baileys_password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U baileys -d baileys_api"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis (Optional - for session clustering)
+  redis:
+    image: redis:7-alpine
+    container_name: baileys-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Baileys API Application
+  baileys-api:
+    build: .
+    container_name: baileys-api
+    environment:
+      NODE_ENV: production
+      PORT: 3001
+      DATABASE_URL: postgresql://baileys:baileys_password@postgres:5432/baileys_api?schema=public
+      REDIS_URL: redis://redis:6379
+      JWT_SECRET: your-super-secret-jwt-key-change-this-in-production
+      API_KEY_SECRET: your-api-key-secret-change-this-in-production
+      WEBHOOK_SECRET: your-webhook-secret-change-this-in-production
+    ports:
+      - "3001:3001"
+    volumes:
+      - ./auth_sessions:/app/auth_sessions
+      - ./uploads:/app/uploads
+      - ./logs:/app/logs
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3001/health', (res) => { process.exit(res.statusCode === 200 ? 0 : 1) })"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Nginx Reverse Proxy (Optional)
+  nginx:
+    image: nginx:alpine
+    container_name: baileys-nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./ssl:/etc/nginx/ssl:ro
+    depends_on:
+      - baileys-api
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  default:
+    name: baileys-network

@@ -1,0 +1,232 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  name      String?
+  password  String
+  apiKey    String   @unique @default(cuid())
+  isActive  Boolean  @default(true)
+  role      Role     @default(USER)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  sessions Session[]
+  webhooks Webhook[]
+  apiUsage ApiUsage[]
+
+  @@map("users")
+}
+
+model Session {
+  id              String        @id @default(cuid())
+  sessionId       String        @unique
+  phoneNumber     String?
+  name            String?
+  status          SessionStatus @default(DISCONNECTED)
+  qrCode          String?
+  pairingCode     String?
+  lastSeen        DateTime?
+  isActive        Boolean       @default(true)
+  authData        Json?
+  metadata        Json?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  messages Message[]
+  chats    Chat[]
+  contacts Contact[]
+  groups   Group[]
+
+  @@map("sessions")
+}
+
+model Message {
+  id            String      @id @default(cuid())
+  messageId     String
+  chatId        String
+  fromMe        Boolean
+  fromJid       String?
+  toJid         String
+  messageType   MessageType
+  content       Json
+  status        MessageStatus @default(PENDING)
+  timestamp     DateTime
+  quotedMessage String?
+  metadata      Json?
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+
+  sessionId String
+  session   Session @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@unique([sessionId, messageId])
+  @@map("messages")
+}
+
+model Chat {
+  id          String   @id @default(cuid())
+  jid         String
+  name        String?
+  isGroup     Boolean  @default(false)
+  isArchived  Boolean  @default(false)
+  isPinned    Boolean  @default(false)
+  isMuted     Boolean  @default(false)
+  unreadCount Int      @default(0)
+  lastMessage Json?
+  metadata    Json?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  sessionId String
+  session   Session @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@unique([sessionId, jid])
+  @@map("chats")
+}
+
+model Contact {
+  id            String   @id @default(cuid())
+  jid           String
+  name          String?
+  pushName      String?
+  profilePicUrl String?
+  isBlocked     Boolean  @default(false)
+  metadata      Json?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  sessionId String
+  session   Session @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@unique([sessionId, jid])
+  @@map("contacts")
+}
+
+model Group {
+  id          String   @id @default(cuid())
+  jid         String
+  subject     String?
+  description String?
+  owner       String?
+  participants Json?
+  settings    Json?
+  metadata    Json?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  sessionId String
+  session   Session @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@unique([sessionId, jid])
+  @@map("groups")
+}
+
+model Webhook {
+  id        String      @id @default(cuid())
+  url       String
+  events    String[]
+  secret    String?
+  isActive  Boolean     @default(true)
+  retries   Int         @default(0)
+  maxRetries Int        @default(3)
+  lastError String?
+  metadata  Json?
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  deliveries WebhookDelivery[]
+
+  @@map("webhooks")
+}
+
+model WebhookDelivery {
+  id         String            @id @default(cuid())
+  event      String
+  payload    Json
+  status     WebhookStatus     @default(PENDING)
+  response   String?
+  attempts   Int               @default(0)
+  nextRetry  DateTime?
+  createdAt  DateTime          @default(now())
+  updatedAt  DateTime          @updatedAt
+
+  webhookId String
+  webhook   Webhook @relation(fields: [webhookId], references: [id], onDelete: Cascade)
+
+  @@map("webhook_deliveries")
+}
+
+model ApiUsage {
+  id        String   @id @default(cuid())
+  endpoint  String
+  method    String
+  status    Int
+  duration  Int
+  timestamp DateTime @default(now())
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("api_usage")
+}
+
+enum Role {
+  USER
+  ADMIN
+}
+
+enum SessionStatus {
+  CONNECTING
+  CONNECTED
+  DISCONNECTED
+  QR_REQUIRED
+  PAIRING_REQUIRED
+  ERROR
+}
+
+enum MessageType {
+  TEXT
+  IMAGE
+  VIDEO
+  AUDIO
+  DOCUMENT
+  STICKER
+  LOCATION
+  CONTACT
+  POLL
+  REACTION
+  BUTTON_REPLY
+  LIST_REPLY
+}
+
+enum MessageStatus {
+  PENDING
+  SENT
+  DELIVERED
+  READ
+  FAILED
+}
+
+enum WebhookStatus {
+  PENDING
+  SUCCESS
+  FAILED
+  RETRYING
+}

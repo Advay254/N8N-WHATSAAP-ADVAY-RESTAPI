@@ -1,10 +1,23 @@
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 import { PrismaClient } from '@prisma/client';
-import { AuthenticatedRequest, ApiError } from '../types/api';
+import { ApiError } from '../types/api';
 import { logger } from '../utils/apiLogger';
 
 const prisma = new PrismaClient();
+
+// Re-export AuthenticatedRequest so routes can import it from here.
+export interface AuthenticatedRequest extends Request {
+  user?: {
+    id: string;
+    email: string;
+    role: string;
+    apiKey: string;
+    isActive?: boolean;
+  };
+  sessionId?: string;
+  startTime?: number;
+}
 
 export const authMiddleware = async (
   req: AuthenticatedRequest,
@@ -85,7 +98,7 @@ export const authMiddleware = async (
 
     next();
   } catch (error) {
-    logger.error('Auth middleware error:', error);
+    logger.error('Auth middleware error:' + error);
     res.status(500).json({
       success: false,
       error: 'Internal server error during authentication.',
@@ -144,7 +157,7 @@ export const sessionMiddleware = async (
     req.sessionId = sessionId;
     next();
   } catch (error) {
-    logger.error('Session middleware error:', error);
+    logger.error('Session middleware error:' + error);
     res.status(500).json({
       success: false,
       error: 'Internal server error during session validation.',
@@ -156,27 +169,23 @@ export const sessionMiddleware = async (
 const logApiUsage = async (req: AuthenticatedRequest) => {
   try {
     const startTime = Date.now();
-
-    // Store start time for duration calculation
     req.startTime = startTime;
 
-    // Log the API call
     await prisma.apiUsage.create({
       data: {
         userId: req.user!.id,
         endpoint: req.path,
         method: req.method,
-        status: 0, // Will be updated in response middleware
-        duration: 0, // Will be updated in response middleware
+        status: 0,
+        duration: 0,
         timestamp: new Date()
       }
     });
   } catch (error) {
-    logger.error('Error logging API usage:', error);
+    logger.error('Error logging API usage:' + error);
   }
 };
 
-// Middleware to update API usage with response data
 export const responseMiddleware = (
   req: AuthenticatedRequest,
   res: Response,
@@ -185,10 +194,8 @@ export const responseMiddleware = (
   const originalSend = res.send;
 
   res.send = function(data) {
-    // Calculate duration
     const duration = req.startTime ? Date.now() - req.startTime : 0;
 
-    // Update API usage record
     if (req.user) {
       updateApiUsage(req.user.id, req.path, req.method, res.statusCode, duration);
     }
@@ -207,13 +214,12 @@ const updateApiUsage = async (
   duration: number
 ) => {
   try {
-    // Find the most recent API usage record for this user and endpoint
     const usage = await prisma.apiUsage.findFirst({
       where: {
         userId,
         endpoint,
         method,
-        status: 0 // Find the record that hasn't been updated yet
+        status: 0
       },
       orderBy: {
         timestamp: 'desc'
@@ -230,11 +236,10 @@ const updateApiUsage = async (
       });
     }
   } catch (error) {
-    logger.error('Error updating API usage:', error);
+    logger.error('Error updating API usage:' + error);
   }
 };
 
-// Rate limiting middleware for specific endpoints
 export const createRateLimit = (windowMs: number, max: number) => {
   const requests = new Map();
 
@@ -243,7 +248,6 @@ export const createRateLimit = (windowMs: number, max: number) => {
     const now = Date.now();
     const windowStart = now - windowMs;
 
-    // Clean old requests
     const userRequests = requests.get(key) || [];
     const validRequests = userRequests.filter((time: number) => time > windowStart);
 
@@ -260,3 +264,4 @@ export const createRateLimit = (windowMs: number, max: number) => {
     next();
   };
 };
+          

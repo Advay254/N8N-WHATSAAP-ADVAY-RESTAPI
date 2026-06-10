@@ -1,4 +1,4 @@
-import { USyncQueryProtocol } from '../../Types/USync'
+import { USyncQueryProtocol } from '../../types/USync'
 import { BinaryNode } from '../../WABinary'
 
 export class USyncLIDProtocol implements USyncQueryProtocol {

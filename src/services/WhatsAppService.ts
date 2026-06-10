@@ -9,7 +9,7 @@ import makeWASocket, {
 } from '../index';
 import { Boom } from '@hapi/boom';
 import QRCode from 'qrcode';
-import { logger, whatsappLogger } from '../utils/apiLogger';
+import { logger, whatsappLogger } from '../Utils/apiLogger';
 import { DatabaseService } from './DatabaseService';
 import { WebhookService } from './WebhookService';
 import { WhatsAppSession, SessionStatus } from '../types/api';
@@ -33,7 +33,6 @@ export class WhatsAppService {
         throw new Error('Session already exists');
       }
 
-      // Create session record in database
       await this.dbService.createSession({
         sessionId,
         userId
@@ -48,34 +47,30 @@ export class WhatsAppService {
 
       this.sessions.set(sessionId, session);
 
-      // Initialize WhatsApp connection
       await this.initializeWhatsAppConnection(sessionId, usePairingCode);
 
       return session;
     } catch (error) {
-      whatsappLogger.error(`Failed to create session ${sessionId}:`, error);
+      whatsappLogger.error(`Failed to create session ${sessionId}:` + error);
       throw error;
     }
   }
 
   private async initializeWhatsAppConnection(sessionId: string, usePairingCode = false) {
     try {
-      // Use database-backed auth state — survives server restarts on Render and other
-      // ephemeral platforms. Replaces the previous useMultiFileAuthState (filesystem).
       const { state, saveCreds } = await useDatabaseAuthState(sessionId, this.dbService.client);
       const { version } = await fetchLatestBaileysVersion();
 
       const socket = makeWASocket({
         version,
-        logger: whatsappLogger,
+        logger: whatsappLogger as any,
         printQRInTerminal: false,
         auth: {
           creds: state.creds,
-          keys: makeCacheableSignalKeyStore(state.keys, whatsappLogger)
+          keys: makeCacheableSignalKeyStore(state.keys, whatsappLogger as any)
         },
         generateHighQualityLinkPreview: true,
         getMessage: async (_key) => {
-          // Implement message retrieval from database
           return undefined;
         }
       });
@@ -83,40 +78,32 @@ export class WhatsAppService {
       const session = this.sessions.get(sessionId)!;
       session.socket = socket;
 
-      // Handle connection events
       socket.ev.on('connection.update', async (update) => {
         await this.handleConnectionUpdate(sessionId, update);
       });
 
-      // Handle credentials update
       socket.ev.on('creds.update', saveCreds);
 
-      // Handle messages
       socket.ev.on('messages.upsert', async (messageUpdate) => {
         await this.handleMessagesUpsert(sessionId, messageUpdate);
       });
 
-      // Handle message updates (read receipts, etc.)
       socket.ev.on('messages.update', async (messageUpdates) => {
         await this.handleMessagesUpdate(sessionId, messageUpdates);
       });
 
-      // Handle chats
       socket.ev.on('chats.upsert', async (chats) => {
         await this.handleChatsUpsert(sessionId, chats);
       });
 
-      // Handle contacts
       socket.ev.on('contacts.upsert', async (contacts) => {
         await this.handleContactsUpsert(sessionId, contacts);
       });
 
-      // Handle groups
       socket.ev.on('groups.upsert', async (groups) => {
         await this.handleGroupsUpsert(sessionId, groups);
       });
 
-      // Handle pairing code if requested
       if (usePairingCode && !socket.authState.creds.registered) {
         session.status = SessionStatus.PAIRING_REQUIRED;
         await this.updateSessionInDatabase(sessionId, { status: 'PAIRING_REQUIRED' });
@@ -124,7 +111,7 @@ export class WhatsAppService {
       }
 
     } catch (error) {
-      whatsappLogger.error(`Failed to initialize WhatsApp connection for ${sessionId}:`, error);
+      whatsappLogger.error(`Failed to initialize WhatsApp connection for ${sessionId}:` + error);
       const session = this.sessions.get(sessionId);
       if (session) {
         session.status = SessionStatus.ERROR;
@@ -141,34 +128,32 @@ export class WhatsAppService {
 
     const { connection, lastDisconnect, qr } = update;
 
-    whatsappLogger.info(`Connection update for ${sessionId}:`, { connection, lastDisconnect: lastDisconnect?.error?.message });
+    whatsappLogger.info(`Connection update for ${sessionId}: connection=${connection}`);
 
     if (qr) {
-      // Generate QR code
       try {
         const qrCodeDataURL = await QRCode.toDataURL(qr);
         session.qrCode = qrCodeDataURL;
         session.status = SessionStatus.QR_REQUIRED;
-        await this.updateSessionInDatabase(sessionId, { 
+        await this.updateSessionInDatabase(sessionId, {
           status: 'QR_REQUIRED',
-          qrCode: qrCodeDataURL 
+          qrCode: qrCodeDataURL
         });
         this.emitSessionUpdate(sessionId);
       } catch (error) {
-        whatsappLogger.error(`Failed to generate QR code for ${sessionId}:`, error);
+        whatsappLogger.error(`Failed to generate QR code for ${sessionId}:` + error);
       }
     }
 
     if (connection === 'close') {
       const shouldReconnect = (lastDisconnect?.error as Boom)?.output?.statusCode !== DisconnectReason.loggedOut;
-      
+
       if (shouldReconnect) {
         whatsappLogger.info(`Reconnecting session ${sessionId}`);
         session.status = SessionStatus.CONNECTING;
         await this.updateSessionInDatabase(sessionId, { status: 'CONNECTING' });
         this.emitSessionUpdate(sessionId);
-        
-        // Reconnect after a delay
+
         setTimeout(() => {
           this.initializeWhatsAppConnection(sessionId);
         }, 5000);
@@ -184,8 +169,7 @@ export class WhatsAppService {
       session.lastSeen = new Date();
       session.qrCode = undefined;
       session.pairingCode = undefined;
-      
-      // Get user info
+
       const user = session.socket?.user;
       if (user) {
         session.phoneNumber = user.id.split(':')[0];
@@ -199,7 +183,7 @@ export class WhatsAppService {
         lastSeen: session.lastSeen,
         qrCode: null
       });
-      
+
       this.emitSessionUpdate(sessionId);
     }
   }
@@ -209,7 +193,6 @@ export class WhatsAppService {
 
     for (const message of messages) {
       try {
-        // Save message to database
         await this.dbService.saveMessage({
           messageId: message.key.id!,
           sessionId,
@@ -220,27 +203,19 @@ export class WhatsAppService {
           messageType: this.getMessageType(message.message),
           content: message.message,
           timestamp: new Date(message.messageTimestamp! * 1000),
-          quotedMessage: message.message?.extendedTextMessage?.contextInfo?.quotedMessage ? 
+          quotedMessage: message.message?.extendedTextMessage?.contextInfo?.quotedMessage ?
             message.message.extendedTextMessage.contextInfo.stanzaId : undefined,
           metadata: { type, pushName: message.pushName }
         });
 
-        // Emit to websocket clients
-        this.io.emit('message', {
-          sessionId,
-          message,
-          type
-        });
+        this.io.emit('message', { sessionId, message, type });
 
-        // Send webhook
         await this.webhookService.sendWebhook(sessionId, 'message.received', {
-          sessionId,
-          message,
-          type
+          sessionId, message, type
         });
 
       } catch (error) {
-        whatsappLogger.error(`Failed to handle message for ${sessionId}:`, error);
+        whatsappLogger.error(`Failed to handle message for ${sessionId}:` + error);
       }
     }
   }
@@ -249,31 +224,19 @@ export class WhatsAppService {
     for (const update of messageUpdates) {
       try {
         const { key, update: messageUpdate } = update;
-        
+
         if (messageUpdate.status) {
-          await this.dbService.updateMessageStatus(
-            key.id!,
-            sessionId,
-            messageUpdate.status
-          );
+          await this.dbService.updateMessageStatus(key.id!, sessionId, messageUpdate.status);
         }
 
-        // Emit to websocket clients
-        this.io.emit('messageUpdate', {
-          sessionId,
-          key,
-          update: messageUpdate
-        });
+        this.io.emit('messageUpdate', { sessionId, key, update: messageUpdate });
 
-        // Send webhook
         await this.webhookService.sendWebhook(sessionId, 'message.updated', {
-          sessionId,
-          key,
-          update: messageUpdate
+          sessionId, key, update: messageUpdate
         });
 
       } catch (error) {
-        whatsappLogger.error(`Failed to handle message update for ${sessionId}:`, error);
+        whatsappLogger.error(`Failed to handle message update for ${sessionId}:` + error);
       }
     }
   }
@@ -294,14 +257,10 @@ export class WhatsAppService {
           metadata: chat
         });
 
-        // Emit to websocket clients
-        this.io.emit('chatUpdate', {
-          sessionId,
-          chat
-        });
+        this.io.emit('chatUpdate', { sessionId, chat });
 
       } catch (error) {
-        whatsappLogger.error(`Failed to handle chat upsert for ${sessionId}:`, error);
+        whatsappLogger.error(`Failed to handle chat upsert for ${sessionId}:` + error);
       }
     }
   }
@@ -319,14 +278,10 @@ export class WhatsAppService {
           metadata: contact
         });
 
-        // Emit to websocket clients
-        this.io.emit('contactUpdate', {
-          sessionId,
-          contact
-        });
+        this.io.emit('contactUpdate', { sessionId, contact });
 
       } catch (error) {
-        whatsappLogger.error(`Failed to handle contact upsert for ${sessionId}:`, error);
+        whatsappLogger.error(`Failed to handle contact upsert for ${sessionId}:` + error);
       }
     }
   }
@@ -336,10 +291,7 @@ export class WhatsAppService {
       try {
         await this.dbService.client.group.upsert({
           where: {
-            sessionId_jid: {
-              sessionId,
-              jid: group.id
-            }
+            sessionId_jid: { sessionId, jid: group.id }
           },
           update: {
             subject: group.subject,
@@ -362,14 +314,10 @@ export class WhatsAppService {
           }
         });
 
-        // Emit to websocket clients
-        this.io.emit('groupUpdate', {
-          sessionId,
-          group
-        });
+        this.io.emit('groupUpdate', { sessionId, group });
 
       } catch (error) {
-        whatsappLogger.error(`Failed to handle group upsert for ${sessionId}:`, error);
+        whatsappLogger.error(`Failed to handle group upsert for ${sessionId}:` + error);
       }
     }
   }
@@ -393,7 +341,7 @@ export class WhatsAppService {
     try {
       await this.dbService.updateSession(sessionId, data);
     } catch (error) {
-      whatsappLogger.error(`Failed to update session ${sessionId} in database:`, error);
+      whatsappLogger.error(`Failed to update session ${sessionId} in database:` + error);
     }
   }
 
@@ -412,7 +360,6 @@ export class WhatsAppService {
     }
   }
 
-  // Public methods for API endpoints
   async getSession(sessionId: string): Promise<WhatsAppSession | undefined> {
     return this.sessions.get(sessionId);
   }
@@ -424,7 +371,7 @@ export class WhatsAppService {
   async deleteSession(sessionId: string): Promise<void> {
     const session = this.sessions.get(sessionId);
     if (session?.socket) {
-      session.socket.end();
+      session.socket.end(undefined);
     }
     this.sessions.delete(sessionId);
     await this.dbService.deleteSession(sessionId);
@@ -439,12 +386,8 @@ export class WhatsAppService {
     const code = await session.socket.requestPairingCode(phoneNumber);
     session.pairingCode = code;
     session.phoneNumber = phoneNumber;
-    
-    await this.updateSessionInDatabase(sessionId, {
-      pairingCode: code,
-      phoneNumber
-    });
-    
+
+    await this.updateSessionInDatabase(sessionId, { pairingCode: code, phoneNumber });
     this.emitSessionUpdate(sessionId);
     return code;
   }
@@ -464,17 +407,17 @@ export class WhatsAppService {
 
   async shutdown(): Promise<void> {
     logger.info('Shutting down WhatsApp service...');
-    
+
     for (const [sessionId, session] of this.sessions) {
       if (session.socket) {
         try {
-          session.socket.end();
+          session.socket.end(undefined);
         } catch (error) {
-          whatsappLogger.error(`Error closing session ${sessionId}:`, error);
+          whatsappLogger.error(`Error closing session ${sessionId}:` + error);
         }
       }
     }
-    
+
     this.sessions.clear();
     await this.dbService.disconnect();
     logger.info('WhatsApp service shutdown complete');

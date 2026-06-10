@@ -1,4 +1,4 @@
-import { USyncQueryProtocol } from '../Types/USync'
+import { USyncQueryProtocol } from '../types/USync'
 import { BinaryNode, getBinaryNodeChild } from '../WABinary'
 import { USyncBotProfileProtocol } from './Protocols/UsyncBotProfileProtocol'
 import { USyncLIDProtocol } from './Protocols/UsyncLIDProtocol'
@@ -50,16 +50,11 @@ export class USyncQuery {
 		}))
 
 		const queryResult: USyncQueryResult = {
-			// TODO: implement errors etc.
 			list: [],
 			sideList: [],
 		}
 
 		const usyncNode = getBinaryNodeChild(result, 'usync')
-
-		//TODO: implement error backoff, refresh etc.
-		//TODO: see if there are any errors in the result node
-		//const resultNode = getBinaryNodeChild(usyncNode, 'result')
 
 		const listNode = getBinaryNodeChild(usyncNode, 'list')
 		if(Array.isArray(listNode?.content) && typeof listNode !== 'undefined') {
@@ -78,8 +73,6 @@ export class USyncQuery {
 			})
 		}
 
-		//TODO: implement side list
-		//const sideListNode = getBinaryNodeChild(usyncNode, 'side_list')
 		return queryResult
 	}
 

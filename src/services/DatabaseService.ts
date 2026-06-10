@@ -1,61 +1,14 @@
 import { PrismaClient } from '@prisma/client';
-import { logger } from '../utils/apiLogger';
+import { logger } from '../Utils/apiLogger';
 
 export class DatabaseService {
   private prisma: PrismaClient;
 
   constructor() {
     this.prisma = new PrismaClient({
-      log: [
-        {
-          emit: 'event',
-          level: 'query',
-        },
-        {
-          emit: 'event',
-          level: 'error',
-        },
-        {
-          emit: 'event',
-          level: 'info',
-        },
-        {
-          emit: 'event',
-          level: 'warn',
-        },
-      ],
-    });
-
-    // Log database queries in development
-    if (process.env.NODE_ENV === 'development') {
-      this.prisma.$on('query', (e) => {
-        logger.debug({
-          query: e.query,
-          params: e.params,
-          duration: e.duration
-        }, 'Database Query');
-      });
-    }
-
-    this.prisma.$on('error', (e) => {
-      logger.error({
-        target: e.target,
-        message: e.message
-      }, 'Database Error');
-    });
-
-    this.prisma.$on('info', (e) => {
-      logger.info({
-        target: e.target,
-        message: e.message
-      }, 'Database Info');
-    });
-
-    this.prisma.$on('warn', (e) => {
-      logger.warn({
-        target: e.target,
-        message: e.message
-      }, 'Database Warning');
+      log: process.env.NODE_ENV === 'development'
+        ? ['query', 'info', 'warn', 'error']
+        : ['warn', 'error'],
     });
   }
 
@@ -64,7 +17,7 @@ export class DatabaseService {
       await this.prisma.$connect();
       logger.info('Database connected successfully');
     } catch (error) {
-      logger.error('Failed to connect to database:', error);
+      logger.error('Failed to connect to database:' + error);
       throw error;
     }
   }
@@ -74,7 +27,7 @@ export class DatabaseService {
       await this.prisma.$disconnect();
       logger.info('Database disconnected successfully');
     } catch (error) {
-      logger.error('Failed to disconnect from database:', error);
+      logger.error('Failed to disconnect from database:' + error);
       throw error;
     }
   }
@@ -140,9 +93,7 @@ export class DatabaseService {
     phoneNumber?: string;
     name?: string;
   }) {
-    return this.prisma.session.create({
-      data
-    });
+    return this.prisma.session.create({ data });
   }
 
   async updateSession(sessionId: string, data: any) {
@@ -195,26 +146,56 @@ export class DatabaseService {
     quotedMessage?: string;
     metadata?: any;
   }) {
+    // sessionId in the schema is a relation field (the session's cuid id),
+    // but findMany uses it as a string filter — connect via session record.
+    const session = await this.prisma.session.findUnique({
+      where: { sessionId: data.sessionId },
+      select: { id: true }
+    });
+
+    if (!session) throw new Error(`Session not found: ${data.sessionId}`);
+
     return this.prisma.message.create({
       data: {
-        ...data,
-        messageType: data.messageType as any
+        messageId: data.messageId,
+        chatId: data.chatId,
+        fromMe: data.fromMe,
+        fromJid: data.fromJid,
+        toJid: data.toJid,
+        messageType: data.messageType as any,
+        content: data.content,
+        timestamp: data.timestamp,
+        quotedMessage: data.quotedMessage,
+        metadata: data.metadata,
+        session: { connect: { id: session.id } }
       }
     });
   }
 
   async updateMessageStatus(messageId: string, sessionId: string, status: string) {
+    const session = await this.prisma.session.findUnique({
+      where: { sessionId },
+      select: { id: true }
+    });
+    if (!session) return;
+
     return this.prisma.message.updateMany({
-      where: { messageId, sessionId },
+      where: { messageId, sessionId: session.id },
       data: { status: status as any }
     });
   }
 
   async getMessages(sessionId: string, chatId?: string, limit = 50, offset = 0) {
+    const session = await this.prisma.session.findUnique({
+      where: { sessionId },
+      select: { id: true }
+    });
+    if (!session) return [];
+
     return this.prisma.message.findMany({
       where: {
-        sessionId,
-        ...(chatId && { chatId })
+        sessionId: session.id,
+        ...(chatId ? { chatId } : {})
       },
       orderBy: { timestamp: 'desc' },
       take: limit,
@@ -307,9 +288,7 @@ export class DatabaseService {
     secret?: string;
     maxRetries?: number;
   }) {
-    return this.prisma.webhook.create({
-      data
-    });
+    return this.prisma.webhook.create({ data });
   }
 
   async getUserWebhooks(userId: string) {
@@ -319,10 +298,7 @@ export class DatabaseService {
   }
 
   async updateWebhook(id: string, data: any) {
-    return this.prisma.webhook.update({
-      where: { id },
-      data
-    });
+    return this.prisma.webhook.update({ where: { id }, data });
   }
 
   async deleteWebhook(id: string) {
@@ -338,17 +314,10 @@ export class DatabaseService {
       by: ['endpoint', 'method'],
       where: {
         userId,
-        timestamp: {
-          gte: startDate,
-          lte: endDate
-        }
+        timestamp: { gte: startDate, lte: endDate }
       },
-      _count: {
-        id: true
-      },
-      _avg: {
-        duration: true
-      }
+      _count: { id: true },
+      _avg: { duration: true }
     });
   }
 
@@ -364,29 +333,19 @@ export class DatabaseService {
       apiCallsLast24h
     ] = await Promise.all([
       this.prisma.session.count({ where: { ...where, isActive: true } }),
-      this.prisma.session.count({ 
-        where: { 
-          ...where, 
-          isActive: true, 
-          status: 'CONNECTED' 
-        } 
-      }),
+      this.prisma.session.count({ where: { ...where, isActive: true, status: 'CONNECTED' } }),
       this.prisma.message.count({ where }),
       this.prisma.message.count({
         where: {
           ...where,
-          timestamp: {
-            gte: new Date(Date.now() - 24 * 60 * 60 * 1000)
-          }
+          timestamp: { gte: new Date(Date.now() - 24 * 60 * 60 * 1000) }
         }
       }),
       userId ? 1 : this.prisma.user.count({ where: { isActive: true } }),
       this.prisma.apiUsage.count({
         where: {
           ...where,
-          timestamp: {
-            gte: new Date(Date.now() - 24 * 60 * 60 * 1000)
-          }
+          timestamp: { gte: new Date(Date.now() - 24 * 60 * 60 * 1000) }
         }
       })
     ]);
